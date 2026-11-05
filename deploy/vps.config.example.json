@@ -1,0 +1,14 @@
+{
+  "host": "",
+  "port": 22,
+  "user": "root",
+  "identityFile": "",
+  "domain": "",
+  "mode": "docker",
+  "basePath": "",
+  "relayPort": 3300,
+  "acmeEmail": "",
+  "remoteDirectory": "/opt/local-codex-relay",
+  "userQuotaBytes": 10000000000,
+  "diskReserveBytes": 1073741824
+}

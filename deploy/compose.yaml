@@ -1,0 +1,61 @@
+name: local-codex-relay
+services:
+  relay:
+    image: local-codex-relay:${RELEASE_ID:?}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      args:
+        VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
+    restart: unless-stopped
+    init: true
+    env_file: ./relay.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      RELAY_DATA: /data
+      COOKIE_SECURE: 'true'
+    volumes:
+      - relay_data:/data
+    expose:
+      - '3000'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+volumes:
+  relay_data:
+  caddy_data:
+  caddy_config:
