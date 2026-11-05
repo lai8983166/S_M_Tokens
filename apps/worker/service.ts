@@ -9,6 +9,8 @@ import {
   run,
   now,
   taskSchema,
+  modelsSchema,
+  type Model,
   type Task,
   type WorkerEvent,
   terminal,
@@ -42,6 +44,8 @@ export async function startWorker(options: WorkerOptions) {
     ready = options.mode === 'mock',
     note = ready ? '模拟执行端：不调用真实模型' : 'Codex 启动中',
     retry = 500;
+  let models: Model[] =
+    options.mode === 'mock' ? [{ model: 'mock', displayName: '模拟模型', isDefault: true }] : [];
   let current:
     | {
         task: Task;
@@ -129,8 +133,24 @@ export async function startWorker(options: WorkerOptions) {
       await codex.start();
       const account = await codex.rpc('account/read', { refreshToken: false });
       ready = !!account.account;
+      if (ready) {
+        let cursor: string | undefined;
+        do {
+          const page = await codex.rpc('model/list', {
+            limit: 100,
+            includeHidden: false,
+            ...(cursor ? { cursor } : {}),
+          });
+          models.push(...modelsSchema.parse(page.data.filter((m: any) => !m.hidden)));
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor && models.length < 200);
+        if (options.model && models.some((m) => m.model === options.model))
+          models = models.map((m) => ({ ...m, isDefault: m.model === options.model }));
+        if (!models.length) throw new Error('No models');
+      }
       note = ready ? 'Codex 已就绪' : '请在本地运行 npm run login';
     } catch {
+      ready = false;
       note = '无法启动 Codex，请检查 CODEX_BIN 和本地版本';
     }
   }
@@ -192,6 +212,8 @@ export async function startWorker(options: WorkerOptions) {
       setTimeout(() => active.reject?.(new Error('任务超过执行期限')), 10_000).unref();
     }, 15 * 60_000);
     try {
+      const model = task.model || models.find((m) => m.isDefault)?.model || models[0]?.model;
+      if (!models.some((m) => m.model === model)) throw new Error('所选模型当前不可用');
       event(task.id, 'started', '准备会话和附件');
       const inputs = await prepareInputs(task, workspace, relay, options.key, active.abort.signal);
       if (options.mode === 'mock') {
@@ -233,7 +255,7 @@ export async function startWorker(options: WorkerOptions) {
         approvalPolicy: 'never',
         sandbox: 'read-only',
         config: safeConfig,
-        ...(options.model ? { model: options.model } : {}),
+        model,
       };
       if (binding) {
         const resumed = await codex.rpc('thread/resume', {
@@ -273,6 +295,7 @@ export async function startWorker(options: WorkerOptions) {
       void completion.catch(() => {});
       const result = await codex.rpc('turn/start', {
         threadId: active.thread,
+        model,
         clientUserMessageId: task.id,
         input: inputs,
         cwd: workspace,
@@ -296,7 +319,7 @@ export async function startWorker(options: WorkerOptions) {
     } finally {
       clearTimeout(deadline);
       current = undefined;
-      send({ type: 'heartbeat', ready, mode: options.mode, note });
+      send({ type: 'heartbeat', ready, mode: options.mode, note, models });
     }
   }
   const cleaning = new Set<string>();
@@ -333,7 +356,7 @@ export async function startWorker(options: WorkerOptions) {
     });
     ws.on('open', () => {
       retry = 500;
-      send({ type: 'hello', ready, mode: options.mode, note });
+      send({ type: 'hello', ready, mode: options.mode, note, models });
       replay();
     });
     ws.on('message', (raw) => {
@@ -378,7 +401,7 @@ export async function startWorker(options: WorkerOptions) {
     'CREATE TABLE IF NOT EXISTS acknowledgements(task_id TEXT PRIMARY KEY,seq INTEGER NOT NULL)',
   );
   const heartbeat = setInterval(() => {
-    send({ type: 'heartbeat', ready, mode: options.mode, note });
+    send({ type: 'heartbeat', ready, mode: options.mode, note, models });
     for (const e of rows(
       db,
       'SELECT o.payload FROM outbox o LEFT JOIN acknowledgements a ON a.task_id=o.task_id WHERE o.seq>COALESCE(a.seq,0) ORDER BY o.rowid',

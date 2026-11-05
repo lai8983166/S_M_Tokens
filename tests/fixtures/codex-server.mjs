@@ -14,6 +14,14 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   const reply = (result) => send({ id: m.id, result });
   if (m.method === 'initialize') reply({ userAgent: 'fixture' });
   else if (m.method === 'account/read') reply({ account: { type: 'chatgpt' } });
+  else if (m.method === 'model/list')
+    reply({
+      data: [
+        { model: 'test-a', displayName: 'Test A', isDefault: true },
+        { model: 'test-b', displayName: 'Test B', isDefault: false },
+      ],
+      nextCursor: null,
+    });
   else if (m.method === 'thread/start') {
     const id = randomUUID();
     threads[id] = { id, turns: [], status: { type: 'idle' } };

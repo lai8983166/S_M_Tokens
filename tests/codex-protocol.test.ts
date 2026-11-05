@@ -75,13 +75,35 @@ test('stdio protocol: restart resumes the same Codex thread and sends only new i
             await app.inject({ url: '/api/status', cookies: { local_relay_session: session } })
           ).json().ready,
       );
+      const catalog = (
+        await app.inject({ url: '/api/status', cookies: { local_relay_session: session } })
+      ).json().models;
+      assert.deepEqual(
+        catalog.map((m: any) => m.model),
+        ['test-a', 'test-b'],
+      );
+      const invalid = await app.inject({
+        method: 'POST',
+        url: `/api/conversations/${c}/messages`,
+        cookies: { local_relay_session: session },
+        payload: { prompt, model: 'unknown', idempotencyKey: randomUUID() },
+      });
+      assert.equal(invalid.statusCode, 400);
+      const idempotencyKey = randomUUID();
       const sent = await app.inject({
         method: 'POST',
         url: `/api/conversations/${c}/messages`,
         cookies: { local_relay_session: session },
-        payload: { prompt, idempotencyKey: randomUUID() },
+        payload: { prompt, model: index ? 'test-b' : 'test-a', idempotencyKey },
       });
       assert.equal(sent.statusCode, 200, sent.body);
+      const conflict = await app.inject({
+        method: 'POST',
+        url: `/api/conversations/${c}/messages`,
+        cookies: { local_relay_session: session },
+        payload: { prompt, model: index ? 'test-a' : 'test-b', idempotencyKey },
+      });
+      assert.equal(conflict.statusCode, 409);
       await wait(async () => {
         const data = (
           await app.inject({
@@ -102,6 +124,12 @@ test('stdio protocol: restart resumes the same Codex thread and sends only new i
     assert.equal(record.filter((r) => r.method === 'thread/resume').length, 1);
     const turns = record.filter((r) => r.method === 'turn/start');
     assert.equal(turns.length, 2);
+    assert.equal(turns[0].params.model, 'test-a');
+    assert.equal(turns[1].params.model, 'test-b');
+    const saved = (
+      await app.inject({ url: '/api/conversations', cookies: { local_relay_session: session } })
+    ).json();
+    assert.equal(saved[0].model, 'test-b');
     assert.equal(turns[0].params.threadId, turns[1].params.threadId);
     assert.deepEqual(turns[1].params.input, [
       { type: 'text', text: '接着解释第二点', text_elements: [] },

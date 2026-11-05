@@ -18,10 +18,21 @@ export const attachmentSchema = z.object({
   size: z.number().int().min(1).max(MAX_FILE_BYTES),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
 });
+export const modelsSchema = z
+  .array(
+    z.object({
+      model: z.string().min(1).max(200),
+      displayName: z.string().min(1).max(200),
+      isDefault: z.boolean(),
+    }),
+  )
+  .max(200);
+export type Model = z.infer<typeof modelsSchema>[number];
 export const taskSchema = z.object({
   id: z.string().uuid(),
   conversationId: z.string().uuid(),
   userId: z.string().uuid(),
+  model: z.string().max(200).optional(),
   prompt: z.string().max(100_000),
   files: z.array(attachmentSchema).max(MAX_FILES),
 });

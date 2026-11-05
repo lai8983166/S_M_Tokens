@@ -31,6 +31,8 @@ import {
   id,
   now,
   eventSchema,
+  modelsSchema,
+  type Model,
   terminal,
 } from '../../packages/shared.js';
 
@@ -99,6 +101,11 @@ export async function createRelay(options: Options) {
     CREATE INDEX IF NOT EXISTS conv_owner ON conversations(user_id,created);
     CREATE INDEX IF NOT EXISTS task_status ON tasks(status,created);
   `);
+  for (const table of ['conversations', 'tasks']) {
+    if (!rows(db, 'PRAGMA table_info(' + table + ')').some((c) => c.name === 'model'))
+      db.exec('ALTER TABLE ' + table + ' ADD COLUMN model TEXT');
+  }
+  let models: Model[] = [];
   const app = Fastify({ logger: false, bodyLimit: 1_000_000 });
   await app.register(cookie);
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
@@ -220,6 +227,7 @@ export async function createRelay(options: Options) {
           conversationId: task.conversation_id,
           userId: task.user_id,
           prompt: message.content,
+          model: task.model ?? undefined,
           files,
         },
       }),
@@ -303,6 +311,7 @@ export async function createRelay(options: Options) {
       ready: workerReady && !!online(),
       paused: paused(),
       mode: workerMode,
+      models,
       note: workerNote,
       queue: row(db, "SELECT COUNT(*) n FROM tasks WHERE status='queued'")!.n,
     };
@@ -370,7 +379,7 @@ export async function createRelay(options: Options) {
   app.get('/api/conversations', async (req) =>
     rows(
       db,
-      'SELECT id,title,created FROM conversations WHERE user_id=? AND deleted=0 ORDER BY created DESC',
+      'SELECT id,title,created,model FROM conversations WHERE user_id=? AND deleted=0 ORDER BY created DESC',
       user(req),
     ),
   );
@@ -423,7 +432,7 @@ export async function createRelay(options: Options) {
       })),
       tasks: rows(
         db,
-        'SELECT id,reply_id,status FROM tasks WHERE conversation_id=? ORDER BY created',
+        'SELECT id,reply_id,status,model FROM tasks WHERE conversation_id=? ORDER BY created',
         req.params.id,
       ),
     };
@@ -434,13 +443,19 @@ export async function createRelay(options: Options) {
       .object({
         prompt: z.string().trim().max(100_000),
         files: z.array(z.string().uuid()).max(MAX_FILES).default([]),
+        model: z.string().max(200).optional(),
         idempotencyKey: z.string().uuid(),
       })
       .parse(req.body);
     if (!b.prompt && !b.files.length) fail('请输入消息或选择附件');
     if (new Set(b.files).size !== b.files.length) fail('附件重复');
     const fingerprint = hash(
-      JSON.stringify({ conversation: c.id, prompt: b.prompt, files: b.files }),
+      JSON.stringify({
+        conversation: c.id,
+        prompt: b.prompt,
+        files: b.files,
+        ...(b.model ? { model: b.model } : {}),
+      }),
     );
     const prior = row(
       db,
@@ -453,6 +468,8 @@ export async function createRelay(options: Options) {
       return { taskId: prior.id };
     }
     if (!online() || !workerReady) fail('本地 Codex 暂未就绪，历史仍可查看', 503);
+    const model = b.model || models.find((m) => m.isDefault)?.model || models[0]?.model || null;
+    if (b.model && !models.some((m) => m.model === b.model)) fail('所选模型当前不可用');
     if (paused()) fail('管理员已暂停接单', 409);
     if (
       row(
@@ -487,7 +504,7 @@ export async function createRelay(options: Options) {
       for (const fid of b.files) run(db, 'INSERT INTO message_files VALUES(?,?)', mid, fid);
       run(
         db,
-        'INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO tasks(id,user_id,conversation_id,message_id,reply_id,status,idem,fingerprint,created,updated,model) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
         tid,
         c.user_id,
         c.id,
@@ -498,7 +515,9 @@ export async function createRelay(options: Options) {
         fingerprint,
         time,
         time,
+        model,
       );
+      run(db, 'UPDATE conversations SET model=? WHERE id=?', model, c.id);
       if (c.title === '新会话')
         run(
           db,
@@ -728,6 +747,7 @@ export async function createRelay(options: Options) {
         const m = JSON.parse(raw.toString());
         lastSeen = now();
         if (m.type === 'hello' || m.type === 'heartbeat') {
+          models = modelsSchema.parse(m.models ?? []);
           workerReady = m.ready === true;
           workerMode = m.mode === 'mock' ? 'mock' : 'codex';
           workerNote = typeof m.note === 'string' ? m.note.slice(0, 200) : '';
