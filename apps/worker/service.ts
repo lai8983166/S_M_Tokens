@@ -45,7 +45,9 @@ export async function startWorker(options: WorkerOptions) {
     note = ready ? '模拟执行端：不调用真实模型' : 'Codex 启动中',
     retry = 500;
   let models: Model[] =
-    options.mode === 'mock' ? [{ model: 'mock', displayName: '模拟模型', isDefault: true }] : [];
+    options.mode === 'mock'
+      ? [{ model: 'mock', displayName: '模拟模型', isDefault: true, supportedReasoningEfforts: [] }]
+      : [];
   let current:
     | {
         task: Task;
@@ -214,6 +216,13 @@ export async function startWorker(options: WorkerOptions) {
     try {
       const model = task.model || models.find((m) => m.isDefault)?.model || models[0]?.model;
       if (!models.some((m) => m.model === model)) throw new Error('所选模型当前不可用');
+      const catalogModel = models.find((m) => m.model === model)!;
+      const effort = task.effort || catalogModel.defaultReasoningEffort;
+      if (
+        effort &&
+        !catalogModel.supportedReasoningEfforts.some((e) => e.reasoningEffort === effort)
+      )
+        throw new Error('所选思考强度当前不可用');
       event(task.id, 'started', '准备会话和附件');
       const inputs = await prepareInputs(task, workspace, relay, options.key, active.abort.signal);
       if (options.mode === 'mock') {
@@ -296,6 +305,7 @@ export async function startWorker(options: WorkerOptions) {
       const result = await codex.rpc('turn/start', {
         threadId: active.thread,
         model,
+        ...(effort ? { effort } : {}),
         clientUserMessageId: task.id,
         input: inputs,
         cwd: workspace,

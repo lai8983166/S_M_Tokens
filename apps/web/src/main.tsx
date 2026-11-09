@@ -13,7 +13,7 @@ async function api(path: string, method = 'GET', body?: unknown) {
   if (!response.ok) throw new Error(result.error ?? '请求失败');
   return result;
 }
-type Conversation = { id: string; title: string; model?: string };
+type Conversation = { id: string; title: string; model?: string; effort?: string };
 type Attachment = { id: string; name: string; size: number };
 type Message = { id: string; role: string; content: string; files: Attachment[] };
 type Task = { id: string; reply_id: string; status: string };
@@ -51,9 +51,22 @@ function App() {
     [userName, setUserName] = useState(''),
     [newKey, setNewKey] = useState('');
   const [model, setModel] = useState('');
+  const [effort, setEffort] = useState('');
+  const selectedModel = status.models?.find((m: any) => (model ? m.model === model : m.isDefault));
+  const effortLabels: Record<string, string> = {
+    none: '无',
+    minimal: '极低',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '极高',
+    max: '最高',
+    ultra: '超高',
+  };
   const [sidebarOpen, setSidebarOpen] = useState(false);
   useEffect(() => {
     setModel(conversations.find((c) => c.id === selected)?.model ?? '');
+    setEffort(conversations.find((c) => c.id === selected)?.effort ?? '');
   }, [selected, conversations]);
   const bottom = useRef<HTMLDivElement>(null),
     fileInput = useRef<HTMLInputElement>(null),
@@ -271,7 +284,7 @@ function App() {
         selectedRef.current = cid;
         setSelected(cid);
       }
-      const payload = { prompt, model, files: files.map((f) => f.id!) };
+      const payload = { prompt, model, effort, files: files.map((f) => f.id!) };
       const signature = JSON.stringify({ cid, ...payload });
       if (requestRef.current.signature !== signature)
         requestRef.current = { signature, id: crypto.randomUUID() };
@@ -400,25 +413,50 @@ function App() {
           {me.admin ? (
             <span>管理</span>
           ) : (
-            <select
-              className="model-select"
-              aria-label="选择模型"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              disabled={!!active || pending || !status.ready}
-            >
-              <option value="">
-                默认 · {status.models?.find((m: any) => m.isDefault)?.displayName ?? '等待连接'}
-              </option>
-              {model && !status.models?.some((m: any) => m.model === model) && (
-                <option value={model}>{model}（不可用）</option>
-              )}
-              {(status.models ?? []).map((m: any) => (
-                <option key={m.model} value={m.model}>
-                  {m.displayName}
+            <>
+              <select
+                className="model-select"
+                aria-label="选择模型"
+                value={model}
+                onChange={(e) => {
+                  setModel(e.target.value);
+                  setEffort('');
+                }}
+                disabled={!!active || pending || !status.ready}
+              >
+                <option value="">
+                  默认 · {status.models?.find((m: any) => m.isDefault)?.displayName ?? '等待连接'}
                 </option>
-              ))}
-            </select>
+                {model && !status.models?.some((m: any) => m.model === model) && (
+                  <option value={model}>{model}（不可用）</option>
+                )}
+                {(status.models ?? []).map((m: any) => (
+                  <option key={m.model} value={m.model}>
+                    {m.displayName}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="effort-select"
+                aria-label="思考强度"
+                title="思考强度"
+                value={effort}
+                onChange={(e) => setEffort(e.target.value)}
+                disabled={!!active || pending || !selectedModel?.supportedReasoningEfforts?.length}
+              >
+                <option value="">
+                  思考 · 默认
+                  {selectedModel?.defaultReasoningEffort
+                    ? `（${effortLabels[selectedModel.defaultReasoningEffort] ?? selectedModel.defaultReasoningEffort}）`
+                    : ''}
+                </option>
+                {(selectedModel?.supportedReasoningEfforts ?? []).map((e: any) => (
+                  <option key={e.reasoningEffort} value={e.reasoningEffort}>
+                    {effortLabels[e.reasoningEffort] ?? e.reasoningEffort}
+                  </option>
+                ))}
+              </select>
+            </>
           )}
           <div className="header-actions">
             {!me.admin && selected && (

@@ -24,6 +24,10 @@ export const modelsSchema = z
       model: z.string().min(1).max(200),
       displayName: z.string().min(1).max(200),
       isDefault: z.boolean(),
+      supportedReasoningEfforts: z
+        .array(z.object({ reasoningEffort: z.string().max(40), description: z.string().max(2000) }))
+        .default([]),
+      defaultReasoningEffort: z.string().max(40).optional(),
     }),
   )
   .max(200);
@@ -33,6 +37,7 @@ export const taskSchema = z.object({
   conversationId: z.string().uuid(),
   userId: z.string().uuid(),
   model: z.string().max(200).optional(),
+  effort: z.string().max(40).optional(),
   prompt: z.string().max(100_000),
   files: z.array(attachmentSchema).max(MAX_FILES),
 });

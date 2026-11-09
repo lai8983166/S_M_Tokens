@@ -17,7 +17,16 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   else if (m.method === 'model/list')
     reply({
       data: [
-        { model: 'test-a', displayName: 'Test A', isDefault: true },
+        {
+          model: 'test-a',
+          displayName: 'Test A',
+          isDefault: true,
+          defaultReasoningEffort: 'medium',
+          supportedReasoningEfforts: [
+            { reasoningEffort: 'medium', description: 'Default' },
+            { reasoningEffort: 'high', description: 'High' },
+          ],
+        },
         { model: 'test-b', displayName: 'Test B', isDefault: false },
       ],
       nextCursor: null,

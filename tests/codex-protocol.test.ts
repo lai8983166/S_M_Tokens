@@ -94,7 +94,12 @@ test('stdio protocol: restart resumes the same Codex thread and sends only new i
         method: 'POST',
         url: `/api/conversations/${c}/messages`,
         cookies: { local_relay_session: session },
-        payload: { prompt, model: index ? 'test-b' : 'test-a', idempotencyKey },
+        payload: {
+          prompt,
+          model: index ? 'test-b' : 'test-a',
+          ...(index ? {} : { effort: 'high' }),
+          idempotencyKey,
+        },
       });
       assert.equal(sent.statusCode, 200, sent.body);
       const conflict = await app.inject({
@@ -125,6 +130,8 @@ test('stdio protocol: restart resumes the same Codex thread and sends only new i
     const turns = record.filter((r) => r.method === 'turn/start');
     assert.equal(turns.length, 2);
     assert.equal(turns[0].params.model, 'test-a');
+    assert.equal(turns[0].params.effort, 'high');
+    assert.equal(turns[1].params.effort, undefined);
     assert.equal(turns[1].params.model, 'test-b');
     const saved = (
       await app.inject({ url: '/api/conversations', cookies: { local_relay_session: session } })

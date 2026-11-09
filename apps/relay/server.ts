@@ -104,6 +104,8 @@ export async function createRelay(options: Options) {
   for (const table of ['conversations', 'tasks']) {
     if (!rows(db, 'PRAGMA table_info(' + table + ')').some((c) => c.name === 'model'))
       db.exec('ALTER TABLE ' + table + ' ADD COLUMN model TEXT');
+    if (!rows(db, 'PRAGMA table_info(' + table + ')').some((c) => c.name === 'effort'))
+      db.exec('ALTER TABLE ' + table + ' ADD COLUMN effort TEXT');
   }
   let models: Model[] = [];
   const app = Fastify({ logger: false, bodyLimit: 1_000_000 });
@@ -228,6 +230,7 @@ export async function createRelay(options: Options) {
           userId: task.user_id,
           prompt: message.content,
           model: task.model ?? undefined,
+          effort: task.effort ?? undefined,
           files,
         },
       }),
@@ -379,7 +382,7 @@ export async function createRelay(options: Options) {
   app.get('/api/conversations', async (req) =>
     rows(
       db,
-      'SELECT id,title,created,model FROM conversations WHERE user_id=? AND deleted=0 ORDER BY created DESC',
+      'SELECT id,title,created,model,effort FROM conversations WHERE user_id=? AND deleted=0 ORDER BY created DESC',
       user(req),
     ),
   );
@@ -432,7 +435,7 @@ export async function createRelay(options: Options) {
       })),
       tasks: rows(
         db,
-        'SELECT id,reply_id,status,model FROM tasks WHERE conversation_id=? ORDER BY created',
+        'SELECT id,reply_id,status,model,effort FROM tasks WHERE conversation_id=? ORDER BY created',
         req.params.id,
       ),
     };
@@ -444,6 +447,7 @@ export async function createRelay(options: Options) {
         prompt: z.string().trim().max(100_000),
         files: z.array(z.string().uuid()).max(MAX_FILES).default([]),
         model: z.string().max(200).optional(),
+        effort: z.string().max(40).optional(),
         idempotencyKey: z.string().uuid(),
       })
       .parse(req.body);
@@ -455,6 +459,7 @@ export async function createRelay(options: Options) {
         prompt: b.prompt,
         files: b.files,
         ...(b.model ? { model: b.model } : {}),
+        ...(b.effort ? { effort: b.effort } : {}),
       }),
     );
     const prior = row(
@@ -470,6 +475,13 @@ export async function createRelay(options: Options) {
     if (!online() || !workerReady) fail('本地 Codex 暂未就绪，历史仍可查看', 503);
     const model = b.model || models.find((m) => m.isDefault)?.model || models[0]?.model || null;
     if (b.model && !models.some((m) => m.model === b.model)) fail('所选模型当前不可用');
+    const catalogModel = models.find((m) => m.model === model);
+    const effort = b.effort || catalogModel?.defaultReasoningEffort || null;
+    if (
+      effort &&
+      !catalogModel?.supportedReasoningEfforts.some((e) => e.reasoningEffort === effort)
+    )
+      fail('所选模型不支持此思考强度');
     if (paused()) fail('管理员已暂停接单', 409);
     if (
       row(
@@ -504,7 +516,7 @@ export async function createRelay(options: Options) {
       for (const fid of b.files) run(db, 'INSERT INTO message_files VALUES(?,?)', mid, fid);
       run(
         db,
-        'INSERT INTO tasks(id,user_id,conversation_id,message_id,reply_id,status,idem,fingerprint,created,updated,model) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO tasks(id,user_id,conversation_id,message_id,reply_id,status,idem,fingerprint,created,updated,model,effort) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
         tid,
         c.user_id,
         c.id,
@@ -516,8 +528,9 @@ export async function createRelay(options: Options) {
         time,
         time,
         model,
+        effort,
       );
-      run(db, 'UPDATE conversations SET model=? WHERE id=?', model, c.id);
+      run(db, 'UPDATE conversations SET model=?,effort=? WHERE id=?', model, effort, c.id);
       if (c.title === '新会话')
         run(
           db,
